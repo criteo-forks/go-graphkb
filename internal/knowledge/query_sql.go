@@ -141,27 +141,28 @@ func buildSQLConstraintsFromPatterns(queryGraph *QueryGraph, constrainedNodes ma
 		// If no relationship of this node has been visited yet, then we have no information on this node.
 		// Scan the assets table again for this particular node.
 		if !relationToAssetExists {
-			if len(n.Labels) == 0 {
+			if len(n.Labels) <= 1 {
 				from = append(from, SQLFrom{Value: "assets", Alias: alias})
-			}
+			} else {
 
-			for _, label := range n.Labels {
-				from = append(from, SQLFrom{Value: "assets", Alias: label})
+				for _, label := range n.Labels {
+					from = append(from, SQLFrom{Value: "assets", Alias: label})
 
-				if scope.Context == WhereContext {
-					joins = append(joins, SQLJoin{
-						Table: "assets",
-						Alias: alias,
-						On:    fmt.Sprintf("%s.type = '%s' AND %s.id = %s.id", alias, label, alias, strings.ReplaceAll(alias, "w", "")),
-					})
-				} else {
-					joins = append(joins, SQLJoin{
-						Table: "assets",
-						Alias: alias,
-						On:    fmt.Sprintf("%s.type = '%s' AND %s.id = %s.id", alias, label, alias, label),
-					})
+					if scope.Context == WhereContext {
+						joins = append(joins, SQLJoin{
+							Table: "assets",
+							Alias: alias,
+							On:    fmt.Sprintf("%s.type = '%s' AND %s.id = %s.id", alias, label, alias, strings.ReplaceAll(alias, "w", "")),
+						})
+					} else {
+						joins = append(joins, SQLJoin{
+							Table: "assets",
+							Alias: alias,
+							On:    fmt.Sprintf("%s.type = '%s' AND %s.id = %s.id", alias, label, alias, label),
+						})
+					}
+
 				}
-
 			}
 			// If a relationship exists, we link this asset to it in the JOIN.
 		} else {
