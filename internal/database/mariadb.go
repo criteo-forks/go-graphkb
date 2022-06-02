@@ -37,8 +37,8 @@ func NewMariaDB(username string, password string, host string, databaseName stri
 	if err != nil {
 		logrus.Fatal(err)
 	}
-	db.SetMaxIdleConns(10)
-	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(50)
+	db.SetMaxOpenConns(50)
 	return &MariaDB{db: db}
 }
 
