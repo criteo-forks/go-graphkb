@@ -77,11 +77,11 @@ func startGraphSizeMonitoring(interval time.Duration, database knowledge.GraphDB
 		}
 	}
 
-	logrus.Infof("Monitoring of the graph size will happen every %ds", int(interval/time.Second))
+	logrus.Infof("Monitoring of the graph size will happen every %s", 30*time.Minute)
 	go func() {
 		for {
 			monitorForOneIteration()
-			time.Sleep(interval)
+			time.Sleep(30 * time.Minute)
 		}
 	}()
 }
