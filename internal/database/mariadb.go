@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/clems4ever/go-graphkb/internal/kbcontext"
@@ -37,6 +38,7 @@ type MariaDBConfig struct {
 type MariaDB struct {
 	db *sql.DB
 
+	lock         sync.Mutex
 	sourcesCache map[string]int
 }
 
@@ -285,6 +287,9 @@ func InTransaction(db *sql.DB, txFunc func(*sql.Tx) error) (err error) {
 
 // InsertAssets insert multiple assets into the graph of the given source
 func (m *MariaDB) InsertAssets(ctx context.Context, source string, assets []knowledge.Asset) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
 	sourceID, err := m.resolveSourceID(ctx, source)
 	if err != nil {
 		return fmt.Errorf("unable to resolve source ID of source %s for inserting assets: %v", source, err)
@@ -314,6 +319,9 @@ func (m *MariaDB) InsertAssets(ctx context.Context, source string, assets []know
 
 // InsertRelations upsert one relation into the graph of the given source
 func (m *MariaDB) InsertRelations(ctx context.Context, source string, relations []knowledge.Relation) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
 	sourceID, err := m.resolveSourceID(ctx, source)
 	if err != nil {
 		return fmt.Errorf("unable to resolve source ID of source %s for inserting relations: %v", source, err)
@@ -347,6 +355,9 @@ func (m *MariaDB) InsertRelations(ctx context.Context, source string, relations 
 
 // RemoveAssets remove one asset from the graph of the given source
 func (m *MariaDB) RemoveAssets(ctx context.Context, source string, assets []knowledge.Asset) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
 	sourceID, err := m.resolveSourceID(ctx, source)
 	if err != nil {
 		return fmt.Errorf("unable to resolve source ID of source %s for removing assets: %v", source, err)
@@ -384,6 +395,9 @@ func (m *MariaDB) RemoveAssets(ctx context.Context, source string, assets []know
 
 // RemoveRelations remove relations from the graph of the given source
 func (m *MariaDB) RemoveRelations(ctx context.Context, source string, relations []knowledge.Relation) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
 	sourceID, err := m.resolveSourceID(ctx, source)
 	if err != nil {
 		return fmt.Errorf("unable to resolve source ID of source %s for removing relations: %v", source, err)
