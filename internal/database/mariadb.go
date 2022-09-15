@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/VividCortex/mysqlerr"
 	"github.com/clems4ever/go-graphkb/internal/kbcontext"
 	"github.com/clems4ever/go-graphkb/internal/knowledge"
 	"github.com/clems4ever/go-graphkb/internal/schema"
@@ -294,25 +293,20 @@ func (m *MariaDB) InsertAssets(ctx context.Context, source string, assets []know
 	for _, asset := range assets {
 		h := hashAsset(asset)
 
-		_, err = m.db.ExecContext(ctx,
-			`INSERT INTO assets (id, type, value) VALUES (?, ?, ?)`,
-			h, asset.Type, asset.Key)
+		_, err = m.db.ExecContext(ctx, `
+			INSERT INTO assets (id, type, value) VALUES (?, ?, ?)
+			ON DUPLICATE KEY UPDATE id = id
+		`, h, asset.Type, asset.Key)
 		if err != nil {
-			if driverErr, ok := err.(*mysql.MySQLError); ok && driverErr.Number == mysqlerr.ER_DUP_ENTRY {
-				// If the entry is duplicated, it's fine but we still need insert a line into assets_by_source.
-			} else {
-				return fmt.Errorf("unable to insert asset %v (%d) in DB from source %s: %v", asset, h, source, err)
-			}
+			return fmt.Errorf("unable to insert asset %v (%d) in DB from source %s: %v", asset, h, source, err)
 		}
 
-		_, err = m.db.ExecContext(ctx,
-			`INSERT INTO assets_by_source (source_id, asset_id) VALUES (?, ?)`, sourceID, h)
+		_, err = m.db.ExecContext(ctx, `
+			INSERT INTO assets_by_source (source_id, asset_id) VALUES (?, ?)
+			ON DUPLICATE KEY UPDATE source_id = source_id
+		`, sourceID, h)
 		if err != nil {
-			if driverErr, ok := err.(*mysql.MySQLError); ok && driverErr.Number == mysqlerr.ER_DUP_ENTRY {
-				// TODO(c.michaud): update the update_time?
-			} else {
-				return fmt.Errorf("unable to insert binding between asset %s (%d) and source %s: %v", asset, h, source, err)
-			}
+			return fmt.Errorf("unable to insert binding between asset %s (%d) and source %s: %v", asset, h, source, err)
 		}
 	}
 	return nil
@@ -331,25 +325,20 @@ func (m *MariaDB) InsertRelations(ctx context.Context, source string, relations 
 		aTo := hashAsset(knowledge.Asset(relation.To))
 		rH := hashRelation(relation)
 
-		_, err = m.db.ExecContext(ctx,
-			"INSERT INTO relations (id, from_id, to_id, type) VALUES (?, ?, ?, ?)",
-			rH, aFrom, aTo, relation.Type)
+		_, err = m.db.ExecContext(ctx, `
+			INSERT INTO relations (id, from_id, to_id, type) VALUES (?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE id = id
+		`, rH, aFrom, aTo, relation.Type)
 		if err != nil {
-			if driverErr, ok := err.(*mysql.MySQLError); ok && driverErr.Number == mysqlerr.ER_DUP_ENTRY {
-				// If the entry is duplicated, it's fine but we still need insert a line into relations_by_source.
-			} else {
-				return fmt.Errorf("unable insert relation %v (%d) in DB from source %s: %v", relation, rH, source, err)
-			}
+			return fmt.Errorf("unable insert relation %v (%d) in DB from source %s: %v", relation, rH, source, err)
 		}
 
-		_, err = m.db.ExecContext(ctx,
-			`INSERT INTO relations_by_source (source_id, relation_id) VALUES (?, ?)`, sourceID, rH)
+		_, err = m.db.ExecContext(ctx, `
+			INSERT INTO relations_by_source (source_id, relation_id) VALUES (?, ?)
+			ON DUPLICATE KEY UPDATE source_id = source_id
+		`, sourceID, rH)
 		if err != nil {
-			if driverErr, ok := err.(*mysql.MySQLError); ok && driverErr.Number == mysqlerr.ER_DUP_ENTRY {
-				// TODO(c.michaud): update the update_time?
-			} else {
-				return fmt.Errorf("unable to insert binding between relation %v (%d) and source %s: %v", relation, rH, source, err)
-			}
+			return fmt.Errorf("unable to insert binding between relation %v (%d) and source %s: %v", relation, rH, source, err)
 		}
 	}
 	return nil
