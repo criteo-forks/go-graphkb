@@ -594,7 +594,7 @@ func (m *MariaDB) CountAssets(ctx context.Context) (int64, error) {
 	}
 
 	var count int64
-	row := m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM assets")
+	row := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM assets")
 	err = row.Scan(&count)
 	if err != nil {
 		tx.Rollback()
@@ -736,6 +736,14 @@ func (m *MariaDB) GetAssetSources(ctx context.Context, ids []string) (map[string
 		return nil, nil
 	}
 
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelReadUncommitted,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	args := make([]interface{}, len(ids))
 	for i, id := range ids {
 		args[i] = id
@@ -745,18 +753,13 @@ func (m *MariaDB) GetAssetSources(ctx context.Context, ids []string) (map[string
 	argsSlices := utils.ChunkSlice(args, 500).([][]interface{})
 
 	for _, argsSlice := range argsSlices {
-		stmt, err := m.db.PrepareContext(ctx, `
+		row, err := tx.QueryContext(ctx, `
 SELECT asset_id, sources.name FROM sources
 INNER JOIN assets_by_source ON sources.id = assets_by_source.source_id
-WHERE asset_id IN (?`+strings.Repeat(",?", len(argsSlice)-1)+`)`)
+WHERE asset_id IN (?`+strings.Repeat(",?", len(argsSlice)-1)+`)`, argsSlice...)
 		if err != nil {
-			return nil, fmt.Errorf("unable to prepare statement for retrieving asset sources: %w", err)
-		}
-		defer stmt.Close()
-
-		row, err := stmt.QueryContext(ctx, argsSlice...)
-		if err != nil {
-			return nil, fmt.Errorf("unable to retrieve sources for assets: %w", err)
+			tx.Rollback()
+			return nil, fmt.Errorf("unable to retrieve sources for asset: %w", err)
 		}
 		defer row.Close()
 
@@ -766,6 +769,7 @@ WHERE asset_id IN (?`+strings.Repeat(",?", len(argsSlice)-1)+`)`)
 		for row.Next() {
 			err = row.Scan(&assetId, &source)
 			if err != nil {
+				tx.Rollback()
 				return nil, fmt.Errorf("unable to scan row of asset source: %w", err)
 			}
 			assetIdStr := fmt.Sprintf("%d", assetId)
@@ -775,13 +779,22 @@ WHERE asset_id IN (?`+strings.Repeat(",?", len(argsSlice)-1)+`)`)
 			idsSet[assetIdStr] = append(idsSet[assetIdStr], source)
 		}
 	}
-	return idsSet, nil
+	return idsSet, tx.Commit()
 }
 
 func (m *MariaDB) GetRelationSources(ctx context.Context, ids []string) (map[string][]string, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
+
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelReadUncommitted,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	args := make([]interface{}, len(ids))
 	for i, id := range ids {
 		args[i] = id
@@ -791,18 +804,13 @@ func (m *MariaDB) GetRelationSources(ctx context.Context, ids []string) (map[str
 	argsSlices := utils.ChunkSlice(args, 500).([][]interface{})
 
 	for _, argsSlice := range argsSlices {
-		stmt, err := m.db.PrepareContext(ctx, `
+		row, err := tx.QueryContext(ctx, `
 		SELECT relation_id, sources.name FROM sources
 		INNER JOIN relations_by_source ON sources.id = relations_by_source.source_id
-		WHERE relation_id IN (?`+strings.Repeat(",?", len(argsSlice)-1)+`)`)
+		WHERE relation_id IN (?`+strings.Repeat(",?", len(argsSlice)-1)+`)`, argsSlice...)
 		if err != nil {
-			return nil, fmt.Errorf("unable to prepare statement for retrieving relation sources: %w", err)
-		}
-		defer stmt.Close()
-
-		row, err := stmt.QueryContext(ctx, argsSlice...)
-		if err != nil {
-			return nil, fmt.Errorf("unable to retrieve sources for relations: %w", err)
+			tx.Rollback()
+			return nil, fmt.Errorf("unable to retrieve sources for relation: %w", err)
 		}
 		defer row.Close()
 
@@ -811,6 +819,7 @@ func (m *MariaDB) GetRelationSources(ctx context.Context, ids []string) (map[str
 		for row.Next() {
 			err = row.Scan(&relationId, &source)
 			if err != nil {
+				tx.Rollback()
 				return nil, fmt.Errorf("unable to scan row of relation source: %w", err)
 			}
 			if _, ok := idsSet[relationId]; !ok {
@@ -819,7 +828,7 @@ func (m *MariaDB) GetRelationSources(ctx context.Context, ids []string) (map[str
 			idsSet[relationId] = append(idsSet[relationId], source)
 		}
 	}
-	return idsSet, nil
+	return idsSet, tx.Commit()
 }
 
 // SaveSuccessfulQuery log an entry to mark a successful query
