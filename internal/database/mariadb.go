@@ -268,23 +268,18 @@ func hashRelation(relation knowledge.Relation) uint64 {
 }
 
 // InTransaction make sure a function is properly using the transaction
-func InTransaction(db *sql.DB, txFunc func(*sql.Tx) error) (err error) {
+func InTransaction(db *sql.DB, txFunc func(*sql.Tx) error) error {
 	tx, err := db.Begin()
 	if err != nil {
-		return
+		return err
 	}
-	defer func() {
-		if p := recover(); p != nil {
-			tx.Rollback()
-			panic(p) // re-throw panic after Rollback
-		} else if err != nil {
-			tx.Rollback() // err is non-nil; don't change it
-		} else {
-			err = tx.Commit() // err is nil; if Commit returns error update err
-		}
-	}()
 	err = txFunc(tx)
-	return err
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // InsertAssets insert multiple assets into the graph of the given source
