@@ -425,10 +425,18 @@ func (m *MariaDB) ReadGraph(ctx context.Context, sourceName string, encoder *kno
 		return fmt.Errorf("unable to resolve source ID from name %s: %v", sourceName, err)
 	}
 
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelReadUncommitted,
+	})
+	if err != nil {
+		return err
+	}
+
 	now := time.Now()
 	{
 		// Select all relations produced by this source
-		rows, err := m.db.QueryContext(ctx, `
+		rows, err := tx.QueryContext(ctx, `
 	SELECT a.type, a.value, b.type, b.value, r.type FROM relations_by_source rbs
 	INNER JOIN relations r ON rbs.relation_id = r.id
 	INNER JOIN assets a ON a.id=r.from_id
@@ -437,6 +445,7 @@ func (m *MariaDB) ReadGraph(ctx context.Context, sourceName string, encoder *kno
 		`, sourceID)
 
 		if err != nil {
+			tx.Rollback()
 			return fmt.Errorf("unable to retrieve relations: %v", err)
 		}
 		defer rows.Close()
@@ -444,6 +453,7 @@ func (m *MariaDB) ReadGraph(ctx context.Context, sourceName string, encoder *kno
 		for rows.Next() {
 			var FromType, ToType, FromKey, ToKey, Type string
 			if err := rows.Scan(&FromType, &FromKey, &ToType, &ToKey, &Type); err != nil {
+				tx.Rollback()
 				return err
 			}
 			fromAsset := knowledge.AssetKey{
@@ -463,6 +473,7 @@ func (m *MariaDB) ReadGraph(ctx context.Context, sourceName string, encoder *kno
 
 			err = encoder.EncodeRelation(relation)
 			if err != nil {
+				tx.Rollback()
 				return fmt.Errorf("unable to write relation %v: %v", relation, err)
 			}
 		}
@@ -471,13 +482,14 @@ func (m *MariaDB) ReadGraph(ctx context.Context, sourceName string, encoder *kno
 	{
 		// Select all assets produced by this source. This is useful in case there are some standalone nodes in the graph of the source.
 		// TODO(c.michaud): optimization could be done by only selecting assets without any relation since the others have already have been retrieved in the previous query.
-		rows, err := m.db.QueryContext(ctx, `
+		rows, err := tx.QueryContext(ctx, `
 	SELECT a.type, a.value FROM assets_by_source abs
 	INNER JOIN assets a ON a.id=abs.asset_id
 	WHERE abs.source_id = ?
 		`, sourceID)
 
 		if err != nil {
+			tx.Rollback()
 			return fmt.Errorf("unable to retrieve assets: %v", err)
 		}
 		defer rows.Close()
@@ -485,6 +497,7 @@ func (m *MariaDB) ReadGraph(ctx context.Context, sourceName string, encoder *kno
 		for rows.Next() {
 			var Key, Type string
 			if err := rows.Scan(&Type, &Key); err != nil {
+				tx.Rollback()
 				return fmt.Errorf("unable to read standalone asset: %v", err)
 			}
 
@@ -495,6 +508,7 @@ func (m *MariaDB) ReadGraph(ctx context.Context, sourceName string, encoder *kno
 
 			err := encoder.EncodeAsset(asset)
 			if err != nil {
+				tx.Rollback()
 				return fmt.Errorf("unable to write asset %v: %v", asset, err)
 			}
 		}
@@ -502,7 +516,7 @@ func (m *MariaDB) ReadGraph(ctx context.Context, sourceName string, encoder *kno
 
 	elapsed := time.Since(now)
 	logrus.Debugf("Read graph of data source with name %s in %fs", sourceName, elapsed.Seconds())
-	return nil
+	return tx.Commit()
 }
 
 // FlushAll flush the database
@@ -555,21 +569,44 @@ func (m *MariaDB) FlushAll(ctx context.Context) error {
 
 // CountAssets count the total number of assets in db.
 func (m *MariaDB) CountAssets(ctx context.Context) (int64, error) {
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelReadUncommitted,
+	})
+	if err != nil {
+		return 0, err
+	}
+
 	var count int64
 	row := m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM assets")
-	return count, row.Scan(&count)
+	err = row.Scan(&count)
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+
+	return count, tx.Commit()
 }
 
 // CountAssetsBySource count the total number of assets in db by source
 func (m *MariaDB) CountAssetsBySource(ctx context.Context) (map[string]int64, error) {
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelReadUncommitted,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	res := map[string]int64{}
-	rows, err := m.db.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, `
 		SELECT s.name, COUNT(*)
 		FROM assets_by_source r
 		JOIN sources s on r.source_id = s.id
 		GROUP BY (source_id);
 	`)
 	if err != nil {
+		tx.Rollback()
 		return nil, err
 	}
 	defer rows.Close()
@@ -579,32 +616,56 @@ func (m *MariaDB) CountAssetsBySource(ctx context.Context) (map[string]int64, er
 		count := int64(0)
 		err := rows.Scan(&name, &count)
 		if err != nil {
+			tx.Rollback()
 			return nil, err
 		}
 
 		res[name] = count
 	}
 
-	return res, nil
+	return res, tx.Commit()
 }
 
 // CountRelations count the total number of relations in db.
 func (m *MariaDB) CountRelations(ctx context.Context) (int64, error) {
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelReadUncommitted,
+	})
+	if err != nil {
+		return 0, err
+	}
+
 	var count int64
-	row := m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM relations")
-	return count, row.Scan(&count)
+	row := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM relations")
+	err = row.Scan(&count)
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+
+	return count, tx.Commit()
 }
 
 // CountRelationsBySource count the total number of relations in db by source.
 func (m *MariaDB) CountRelationsBySource(ctx context.Context) (map[string]int64, error) {
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelReadUncommitted,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	res := map[string]int64{}
-	rows, err := m.db.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, `
 		SELECT s.name, COUNT(*)
 		FROM relations_by_source r
 		JOIN sources s on r.source_id = s.id
 		GROUP BY (source_id);
 	`)
 	if err != nil {
+		tx.Rollback()
 		return nil, err
 	}
 	defer rows.Close()
@@ -614,13 +675,14 @@ func (m *MariaDB) CountRelationsBySource(ctx context.Context) (map[string]int64,
 		count := int64(0)
 		err := rows.Scan(&name, &count)
 		if err != nil {
+			tx.Rollback()
 			return nil, err
 		}
 
 		res[name] = count
 	}
 
-	return res, nil
+	return res, tx.Commit()
 }
 
 // Close close the connection to maria
@@ -854,6 +916,7 @@ func (m *MariaDB) ListSources(ctx context.Context) (map[string]string, error) {
 
 // MariaDBCursor is a cursor of data retrieved by MariaDB
 type MariaDBCursor struct {
+	tx   *sql.Tx
 	rows *sql.Rows
 
 	Projections []knowledge.Projection
@@ -861,12 +924,22 @@ type MariaDBCursor struct {
 
 // NewMariaDBCursor create a new instance of MariaDBCursor
 func NewMariaDBCursor(ctx context.Context, database *sql.DB, sqlTranslation knowledge.SQLTranslation) (*MariaDBCursor, error) {
-	rows, err := database.QueryContext(ctx, sqlTranslation.Query)
+	tx, err := database.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelReadUncommitted,
+	})
 	if err != nil {
 		return nil, err
 	}
 
+	rows, err := tx.QueryContext(ctx, sqlTranslation.Query)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
 	return &MariaDBCursor{
+		tx:          tx,
 		rows:        rows,
 		Projections: sqlTranslation.ProjectionTypes,
 	}, nil
@@ -966,5 +1039,11 @@ func (mc *MariaDBCursor) Read(ctx context.Context, doc interface{}) error {
 
 // Close the cursor
 func (mc *MariaDBCursor) Close() error {
-	return mc.rows.Close()
+	err := mc.rows.Close()
+	if err != nil {
+		mc.tx.Rollback()
+		return err
+	}
+
+	return mc.tx.Commit()
 }
