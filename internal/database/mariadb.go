@@ -38,8 +38,10 @@ type MariaDBConfig struct {
 type MariaDB struct {
 	db *sql.DB
 
-	lock         sync.Mutex
-	sourcesCache map[string]int
+	lock sync.Mutex
+
+	sourceCacheLock sync.Mutex
+	sourcesCache    map[string]int
 }
 
 // NewMariaDB create an instance of mariadb
@@ -59,7 +61,7 @@ func NewMariaDB(cfg MariaDBConfig) *MariaDB {
 	}
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
-	return &MariaDB{db: db}
+	return &MariaDB{db: db, sourcesCache: map[string]int{}}
 }
 
 // InitializeSchema initialize the schema of the database
@@ -201,24 +203,24 @@ func isUnknownTableError(err error) bool {
 
 // resolveSourceIDFromDB resolve the source ID from the source name from the database
 func (m *MariaDB) resolveSourceIDFromDB(ctx context.Context, sourceName string) (int, error) {
-	r, err := m.db.QueryContext(ctx, "SELECT id FROM sources WHERE name = ? LIMIT 1", sourceName)
+	r := m.db.QueryRowContext(ctx, "SELECT id FROM sources WHERE name = ? LIMIT 1", sourceName)
+
+	var sourceID int
+	err := r.Scan(&sourceID)
 	if err != nil {
 		return 0, err
 	}
-	defer r.Close()
 
-	var sourceID int
-	for r.Next() {
-		err = r.Scan(&sourceID)
-		if err != nil {
-			return 0, err
-		}
-	}
+	m.sourcesCache[sourceName] = sourceID
+
 	return sourceID, nil
 }
 
 // resolveSourceID resolve the source ID from the source name from the cache first and then from the DB
 func (m *MariaDB) resolveSourceID(ctx context.Context, sourceName string) (int, error) {
+	m.sourceCacheLock.Lock()
+	defer m.sourceCacheLock.Unlock()
+
 	// TODO(c.michaud): invalidate cache after some time.
 	if v, ok := m.sourcesCache[sourceName]; ok {
 		return v, nil
