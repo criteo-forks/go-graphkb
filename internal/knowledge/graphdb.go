@@ -18,6 +18,7 @@ type GraphDB interface {
 	Close() error
 
 	InitializeSchema() error
+	Start()
 
 	ReadGraph(ctx context.Context, sourceName string, encoder *GraphEncoder) error
 

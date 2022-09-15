@@ -180,6 +180,35 @@ func (m *MariaDB) InitializeSchema() error {
 	return nil
 }
 
+func (m *MariaDB) Start() {
+	go func() {
+		for range time.Tick(5 * time.Minute) {
+			err := m.clean()
+			if err != nil {
+				logrus.Errorf("error cleaning assets: %s", err)
+			}
+		}
+	}()
+}
+
+func (m *MariaDB) clean() error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	res, err := m.db.Exec(`
+		DELETE a FROM assets a
+		LEFT JOIN assets_by_source s
+		ON a.id = s.asset_id WHERE s.asset_id IS NULL;
+	`)
+	if err != nil {
+		return err
+	}
+
+	affected, _ := res.RowsAffected()
+	logrus.Infof("cleaned %d assets", affected)
+	return nil
+}
+
 // AssetRegistry store ID of assets in a cache
 type AssetRegistry struct {
 	cache map[knowledge.AssetKey]int64
@@ -363,25 +392,13 @@ func (m *MariaDB) RemoveAssets(ctx context.Context, source string, assets []know
 	for _, asset := range assets {
 		h := hashAsset(asset)
 
-		err := InTransaction(m.db, func(tx *sql.Tx) error {
-			_, err = tx.ExecContext(ctx,
-				`DELETE FROM assets_by_source WHERE asset_id = ? AND source_id = ?`,
-				h, sourceID)
-			if err != nil {
-				return fmt.Errorf("unable to remove binding between asset %v (%d) and source %s: %v", asset, h, source, err)
-			}
+		_, err = m.db.ExecContext(ctx,
+			`DELETE FROM assets_by_source WHERE asset_id = ? AND source_id = ?`,
+			h, sourceID)
+		if err != nil {
+			return fmt.Errorf("unable to remove binding between asset %v (%d) and source %s: %v", asset, h, source, err)
+		}
 
-			_, err = tx.ExecContext(ctx,
-				`DELETE FROM assets WHERE id = ? AND NOT EXISTS (
-			SELECT * FROM assets_by_source WHERE asset_id = ?
-		)`,
-				h, h)
-			if err != nil {
-				return fmt.Errorf("unable to remove asset %v (%d) from source %s: %v", asset, h, source, err)
-			}
-
-			return nil
-		})
 		if err != nil {
 			return err
 		}

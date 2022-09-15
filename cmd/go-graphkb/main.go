@@ -158,6 +158,8 @@ func listen(cmd *cobra.Command, args []string) {
 		logrus.Fatal(err)
 	}
 
+	Database.Start()
+
 	listenInterface := viper.GetString("server_listen")
 	concurrency := viper.GetInt64("concurrency")
 	if concurrency == 0 {
