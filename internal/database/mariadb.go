@@ -720,14 +720,6 @@ func (m *MariaDB) Close() error {
 
 // Query the database with provided intermediate query representation
 func (m *MariaDB) Query(ctx context.Context, sqlTranslation knowledge.SQLTranslation) (*knowledge.GraphQueryResult, error) {
-	deadline, ok := ctx.Deadline()
-
-	// If there is a deadline, we make sure the query stops right after it has been reached.
-	if ok {
-		// Query can take 35 seconds max before being aborted...
-		sqlTranslation.Query = fmt.Sprintf("SET STATEMENT max_statement_time=%f FOR %s", time.Until(deadline).Seconds()+5, sqlTranslation.Query)
-	}
-
 	user := kbcontext.XForwardedUser(ctx)
 
 	logrus.Debugf("Query to be executed for user %s: %s", user, sqlTranslation.Query)
