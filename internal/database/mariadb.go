@@ -854,6 +854,7 @@ func (m *MariaDB) ListSources(ctx context.Context) (map[string]string, error) {
 
 // MariaDBCursor is a cursor of data retrieved by MariaDB
 type MariaDBCursor struct {
+	tx   *sql.Tx
 	rows *sql.Rows
 
 	Projections []knowledge.Projection
@@ -861,12 +862,19 @@ type MariaDBCursor struct {
 
 // NewMariaDBCursor create a new instance of MariaDBCursor
 func NewMariaDBCursor(ctx context.Context, database *sql.DB, sqlTranslation knowledge.SQLTranslation) (*MariaDBCursor, error) {
-	rows, err := database.QueryContext(ctx, sqlTranslation.Query)
+	tx, err := database.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelReadUncommitted,
+	})
+
+	rows, err := tx.QueryContext(ctx, sqlTranslation.Query)
 	if err != nil {
+		tx.Rollback()
 		return nil, err
 	}
 
 	return &MariaDBCursor{
+		tx:          tx,
 		rows:        rows,
 		Projections: sqlTranslation.ProjectionTypes,
 	}, nil
@@ -966,5 +974,11 @@ func (mc *MariaDBCursor) Read(ctx context.Context, doc interface{}) error {
 
 // Close the cursor
 func (mc *MariaDBCursor) Close() error {
-	return mc.rows.Close()
+	err := mc.rows.Close()
+	if err != nil {
+		mc.tx.Rollback()
+		return err
+	}
+
+	return mc.tx.Commit()
 }
